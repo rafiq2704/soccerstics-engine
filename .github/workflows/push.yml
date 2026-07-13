@@ -1,1 +1,26 @@
+name: Push to Replicate
 
+# Run it from the Actions tab with a button — nothing on your device stays connected.
+on:
+  workflow_dispatch:
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      # CUDA model images are big; free up runner disk first (~30 GB).
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+
+      - name: Setup Cog
+        uses: replicate/setup-cog@v2
+        with:
+          token: ${{ secrets.REPLICATE_CLI_AUTH_TOKEN }}
+
+      - name: Push model
+        run: cog push r8.im/YOUR_USERNAME/soccerstics-instep
