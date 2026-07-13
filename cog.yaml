@@ -12,3 +12,5 @@ build:
     - "numpy==1.26.4"
   run:
     - "python -c \"from ultralytics import YOLO; YOLO('yolo11m-pose.pt'); YOLO('yolo11m.pt')\""
+
+predict: "predict.py:Predictor"
