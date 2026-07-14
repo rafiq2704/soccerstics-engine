@@ -1,3 +1,5 @@
+# Cog config — defines the container Replicate runs the engine in.
+# Docs: https://cog.run/yaml
 build:
   gpu: true
   cuda: "12.1"
@@ -6,11 +8,12 @@ build:
     - "libgl1"
     - "libglib2.0-0"
   python_packages:
-    - "ultralytics==8.3.0"
-    - "sahi==0.11.20"
+    - "ultralytics==8.3.0"      # YOLO11 pose + detection
+    - "sahi==0.11.20"           # sliced inference for the small, fast ball
     - "opencv-python-headless==4.10.0.84"
     - "numpy==1.26.4"
   run:
-    - "python -c \"from ultralytics import YOLO; YOLO('yolo11m-pose.pt'); YOLO('yolo11m.pt')\""
+    # pre-download the weights into the image so cold-starts are fast
+    - "python -c \"from ultralytics import YOLO; YOLO('yolo11n-pose.pt'); YOLO('yolo11n.pt')\""
 
 predict: "predict.py:Predictor"

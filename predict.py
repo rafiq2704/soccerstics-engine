@@ -18,12 +18,14 @@ import engine
 
 class Predictor(BasePredictor):
     def setup(self):
-        # Pose model (kinematics) — medium is a good accuracy/speed balance.
-        self.pose_model = YOLO("yolo11m-pose.pt")
-        # Detection model wrapped for SAHI sliced inference (the ball).
+        # Pose model (kinematics) — nano for fast load + inference on T4.
+        self.pose_model = YOLO("yolo11n-pose.pt")
+        # Fast full-frame detector (the ball, fast path).
+        self.fast_model = YOLO("yolo11n.pt")
+        # SAHI sliced detector (the ball, slow fallback only when missed).
         self.sahi_model = AutoDetectionModel.from_pretrained(
             model_type="ultralytics",
-            model_path="yolo11m.pt",
+            model_path="yolo11n.pt",
             confidence_threshold=0.25,
             device="cuda:0",
         )
@@ -54,7 +56,7 @@ class Predictor(BasePredictor):
         result = engine.analyse(
             video_path=str(video),
             pose_model=self.pose_model,
-            sahi_model=self.sahi_model,
+            ball_models=(self.fast_model, self.sahi_model),
             session={"player": player, "foot": foot, "date": date},
             calibration=calibration,
             max_frames=max_frames,

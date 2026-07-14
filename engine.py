@@ -127,12 +127,33 @@ def run_pose(pose_model, frame, foot):
             "plant_ankle": plant, "knee_angle": _angle(hip, knee, ankle)}
 
 
-def run_ball(sahi_model, frame):
-    """Sliced YOLO detection; return best 'sports ball' centre or None."""
+def run_ball(models, frame):
+    """Fast path first: full-frame YOLO. Only fall back to slow SAHI slicing
+    on frames where the ball is missed. This is the main speed win — most
+    frames resolve on the fast path and never touch slicing.
+
+    `models` is a tuple: (fast_yolo_model, sahi_model).
+    """
+    fast_model, sahi_model = models
+
+    # --- fast path: plain full-frame detection ---
+    res = fast_model(frame, verbose=False, classes=[32])  # 32 = sports ball
+    best, best_score = None, 0.0
+    if res and res[0].boxes is not None and len(res[0].boxes) > 0:
+        b = res[0].boxes
+        xywh = b.xywh.cpu().numpy()
+        conf = b.conf.cpu().numpy()
+        for (cx, cy, w, h), sc in zip(xywh, conf):
+            if sc > best_score:
+                best, best_score = [float(cx), float(cy)], float(sc)
+    if best is not None:
+        return best
+
+    # --- slow path: SAHI slicing, only when the ball was missed ---
     from sahi.predict import get_sliced_prediction
     result = get_sliced_prediction(
         frame, sahi_model,
-        slice_height=512, slice_width=512,
+        slice_height=640, slice_width=640,
         overlap_height_ratio=0.2, overlap_width_ratio=0.2,
         verbose=0,
     )
@@ -251,7 +272,7 @@ def segment_phases(frames, fps, contact_i):
 # --------------------------------------------------------------------------
 # Orchestration
 # --------------------------------------------------------------------------
-def analyse(video_path, pose_model, sahi_model, session, calibration=None,
+def analyse(video_path, pose_model, ball_models, session, calibration=None,
             max_frames=240):
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 60.0
@@ -264,13 +285,16 @@ def analyse(video_path, pose_model, sahi_model, session, calibration=None,
     kf = BallKalman()
 
     frames, i = [], 0
+    import time as _time
+    _t0 = _time.time()
+    print(f"[soccerstics] start: fps={fps} size={W}x{H} foot={foot} max_frames={max_frames}", flush=True)
     while i < max_frames:
         ok, frame = cap.read()
         if not ok:
             break
         t = i / fps
         pose = run_pose(pose_model, frame, foot)
-        raw_ball = run_ball(sahi_model, frame)
+        raw_ball = run_ball(ball_models, frame)
         ball_xy, predicted = kf.step(raw_ball)
 
         frames.append({
@@ -280,8 +304,13 @@ def analyse(video_path, pose_model, sahi_model, session, calibration=None,
             "ball_predicted": bool(predicted),
             "knee_angle": round(pose["knee_angle"], 1) if pose else None,
         })
+        if i % 5 == 0:
+            print(f"[soccerstics] frame {i}/{max_frames}  "
+                  f"pose={'y' if pose else 'n'} ball={'y' if raw_ball else 'n'}  "
+                  f"elapsed={_time.time()-_t0:.1f}s", flush=True)
         i += 1
     cap.release()
+    print(f"[soccerstics] processed {len(frames)} frames in {_time.time()-_t0:.1f}s", flush=True)
 
     contact_i = find_contact(frames)
     metrics = compute_metrics(frames, fps, ppm, Hmat, contact_i)
