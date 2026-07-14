@@ -80,6 +80,17 @@ def build_scale(calibration, frame_w, frame_h):
     return ppm, None, "uncalibrated-estimate", 0.3
 
 
+def _scale_calibration(calibration, scale):
+    """Calibration pixel points arrive in native resolution; scale them to
+    the processing resolution so they line up with the detected coords."""
+    if not calibration or scale == 1.0:
+        return calibration
+    cal = dict(calibration)
+    if "points_px" in cal:
+        cal["points_px"] = [[p[0] * scale, p[1] * scale] for p in cal["points_px"]]
+    return cal
+
+
 def _to_world(Hmat, pt):
     v = np.array([pt[0], pt[1], 1.0])
     w = Hmat @ v
@@ -280,7 +291,19 @@ def analyse(video_path, pose_model, ball_models, session, calibration=None,
     H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
     foot = (session or {}).get("foot", "right")
 
-    ppm, Hmat, cal_method, cal_conf = build_scale(calibration, W, H)
+    # Downscale huge frames (e.g. 4K/8K phone video) before detection.
+    # Detectors shrink images to ~640px internally anyway, so processing at
+    # native 8K is pure wasted work — and it makes SAHI slicing explode.
+    # We process at PROC_W wide, then scale coordinates back to native W/H.
+    PROC_W = 1280
+    proc_scale = 1.0
+    if W > PROC_W:
+        proc_scale = PROC_W / float(W)
+    procW = int(W * proc_scale)
+    procH = int(H * proc_scale)
+
+    ppm, Hmat, cal_method, cal_conf = build_scale(
+        _scale_calibration(calibration, proc_scale), procW, procH)
     from kalman import BallKalman
     kf = BallKalman()
 
@@ -292,6 +315,8 @@ def analyse(video_path, pose_model, ball_models, session, calibration=None,
         ok, frame = cap.read()
         if not ok:
             break
+        if proc_scale != 1.0:
+            frame = cv2.resize(frame, (procW, procH), interpolation=cv2.INTER_AREA)
         t = i / fps
         pose = run_pose(pose_model, frame, foot)
         raw_ball = run_ball(ball_models, frame)
@@ -316,9 +341,11 @@ def analyse(video_path, pose_model, ball_models, session, calibration=None,
     metrics = compute_metrics(frames, fps, ppm, Hmat, contact_i)
     phases = segment_phases(frames, fps, contact_i)
 
-    # normalise coords 0..1 for the dashboard overlay
+    # normalise coords 0..1 for the dashboard overlay.
+    # Detection ran at proc size, so normalise by proc size (ratios are
+    # identical to native, and the dashboard only needs 0..1).
     def norm(pt):
-        return [round(pt[0] / W, 4), round(pt[1] / H, 4)] if pt else None
+        return [round(pt[0] / procW, 4), round(pt[1] / procH, 4)] if pt else None
     out_frames = []
     for f in frames:
         p = f["pose"]
